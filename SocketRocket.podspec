@@ -1,15 +1,22 @@
 Pod::Spec.new do |s|
-  s.name               = "SocketRocket"
-  s.version            = '0.3.1-beta2'
-  s.summary            = 'A conforming WebSocket (RFC 6455) client library.'
-  s.homepage           = 'https://github.com/square/SocketRocket'
-  s.authors            = 'Square'
-  s.license            = 'Apache License, Version 2.0'
-  s.source             = { :git => 'https://github.com/square/SocketRocket.git', :commit => '82c9f8938f8b9b7aa578866cb7ce56bc11e52ced' }
-  s.source_files       = 'SocketRocket/*.{h,m,c}'
+  s.name               = 'SocketRocket'
+  s.version            = '0.5.1'
+  s.summary            = 'A conforming WebSocket (RFC 6455) client library for iOS, macOS and tvOS.'
+  s.homepage           = 'https://github.com/facebook/SocketRocket'
+  s.authors            = { 'Nikita Lutsenko' => 'nlutsenko@me.com', 'Dan Federman' => 'federman@squareup.com', 'Mike Lewis' => 'mikelikespie@gmail.com' }
+  s.license            = 'BSD'
+  s.source             = { :git => 'https://github.com/facebook/SocketRocket.git', :tag => s.version.to_s }
   s.requires_arc       = true
-  s.ios.frameworks     = %w{CFNetwork Security}
-  s.osx.frameworks     = %w{CoreServices Security}
-  s.osx.compiler_flags = '-Wno-format'
-  s.libraries          = "icucore"
+  
+  s.source_files       = 'SocketRocket/**/*.{h,m}'
+  s.public_header_files = 'SocketRocket/*.h'
+
+  s.ios.deployment_target  = '6.0'
+  s.osx.deployment_target  = '10.8'
+  s.tvos.deployment_target = '9.0'
+
+  s.ios.frameworks     = 'CFNetwork', 'Security'
+  s.osx.frameworks     = 'CoreServices', 'Security'
+  s.tvos.frameworks    = 'CFNetwork', 'Security'
+  s.libraries          = 'icucore'
 end
