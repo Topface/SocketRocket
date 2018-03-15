@@ -165,7 +165,7 @@ NSString *const SRHTTPResponseErrorKey = @"HTTPResponseStatusCode";
     _workQueue = dispatch_queue_create(NULL, DISPATCH_QUEUE_SERIAL);
 
     // Going to set a specific on the queue so we can validate we're on the work queue
-    dispatch_queue_set_specific(_workQueue, (__bridge void *)self, (__bridge void *)(_workQueue), NULL);
+    dispatch_queue_set_specific(_workQueue, (__bridge void *)(_workQueue), (__bridge void *)(_workQueue), NULL);
 
     _delegateController = [[SRDelegateController alloc] init];
 
@@ -247,7 +247,7 @@ NSString *const SRHTTPResponseErrorKey = @"HTTPResponseStatusCode";
 
 - (void)assertOnWorkQueue;
 {
-    assert(dispatch_get_specific((__bridge void *)self) == (__bridge void *)_workQueue);
+    assert(dispatch_get_specific((__bridge void *)(_workQueue)) == (__bridge void *)_workQueue);
 }
 
 ///--------------------------------------
@@ -316,49 +316,66 @@ NSString *const SRHTTPResponseErrorKey = @"HTTPResponseStatusCode";
     NSAssert(self.readyState == SR_CONNECTING, @"Cannot call -(void)open on SRWebSocket more than once.");
 
     _selfRetain = self;
+    __weak typeof(self) wself = self;
 
     if (_urlRequest.timeoutInterval > 0) {
         dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(_urlRequest.timeoutInterval * NSEC_PER_SEC));
         dispatch_after(popTime, dispatch_get_main_queue(), ^{
-            if (self.readyState == SR_CONNECTING) {
-                NSError *error = SRErrorWithDomainCodeDescription(NSURLErrorDomain, NSURLErrorTimedOut, @"Timed out connecting to server.");
-                [self _failWithError:error];
-            }
+            [wself _connectionTimedOut];
         });
     }
 
     _proxyConnect = [[SRProxyConnect alloc] initWithURL:_url];
-
-    __weak typeof(self) wself = self;
     [_proxyConnect openNetworkStreamWithCompletion:^(NSError *error, NSInputStream *readStream, NSOutputStream *writeStream) {
         [wself _connectionDoneWithError:error readStream:readStream writeStream:writeStream];
     }];
 }
 
+- (void)_connectionTimedOut
+{
+    if (self.readyState == SR_CONNECTING) {
+        NSError *error = SRErrorWithDomainCodeDescription(NSURLErrorDomain, NSURLErrorTimedOut, @"Timed out connecting to server.");
+        [self _failWithError:error];
+    }
+
+    // Schedule to run on a work queue, to make sure we don't run this inline and deallocate `self` inside `SRProxyConnect`.
+    // TODO: (nlutsenko) Find a better structure for this, maybe Bolts Tasks?
+    dispatch_async(_workQueue, ^{
+        _proxyConnect = nil;
+    });
+}
+
 - (void)_connectionDoneWithError:(NSError *)error readStream:(NSInputStream *)readStream writeStream:(NSOutputStream *)writeStream
 {
-    if (error != nil) {
-        [self _failWithError:error];
-    } else {
-        _outputStream = writeStream;
-        _inputStream = readStream;
-
-        _inputStream.delegate = self;
-        _outputStream.delegate = self;
-        [self _updateSecureStreamOptions];
-
-        if (!_scheduledRunloops.count) {
-            [self scheduleInRunLoop:[NSRunLoop SR_networkRunLoop] forMode:NSDefaultRunLoopMode];
-        }
-
-        // If we don't require SSL validation - consider that we connected.
-        // Otherwise `didConnect` is called when SSL validation finishes.
-        if (!_requestRequiresSSL) {
-            dispatch_async(_workQueue, ^{
-                [self didConnect];
-            });
+    if (self.readyState == SR_CONNECTING) {
+        if (error != nil) {
+            [self _failWithError:error];
+        } else {
+            _outputStream = writeStream;
+            _inputStream = readStream;
+            
+            _inputStream.delegate = self;
+            _outputStream.delegate = self;
+            [self _updateSecureStreamOptions];
+            
+            if (!_scheduledRunloops.count) {
+                [self scheduleInRunLoop:[NSRunLoop SR_networkRunLoop] forMode:NSDefaultRunLoopMode];
+            }
+            
+            // If we don't require SSL validation - consider that we connected.
+            // Otherwise `didConnect` is called when SSL validation finishes.
+            if (!_requestRequiresSSL) {
+                dispatch_async(_workQueue, ^{
+                    [self didConnect];
+                });
+            }
         }
     }
+    else {
+        [readStream close];
+        [writeStream close];
+    }
+    
     // Schedule to run on a work queue, to make sure we don't run this inline and deallocate `self` inside `SRProxyConnect`.
     // TODO: (nlutsenko) Find a better structure for this, maybe Bolts Tasks?
     dispatch_async(_workQueue, ^{
@@ -1076,12 +1093,11 @@ static const uint8_t SRPayloadLenMask   = 0x7F;
             _outputBufferOffset = 0;
         }
     }
-
-    if (_closeWhenFinishedWriting &&
-        (dispatch_data_get_size(_outputBuffer) - _outputBufferOffset) == 0 &&
-        (_inputStream.streamStatus != NSStreamStatusNotOpen &&
-         _inputStream.streamStatus != NSStreamStatusClosed) &&
-        !_sentClose) {
+    
+    if (_closeWhenFinishedWriting && !_sentClose &&
+        (((dispatch_data_get_size(_outputBuffer) - _outputBufferOffset) == 0 &&
+          (_inputStream.streamStatus != NSStreamStatusNotOpen && _inputStream.streamStatus != NSStreamStatusClosed))  ||
+         (_inputStream == nil))) {
         _sentClose = YES;
 
         @synchronized(self) {
